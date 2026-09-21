@@ -1,0 +1,1 @@
+{"id": "train-1", "question": "Which runtime version does fictional Atlas require through its plugin?", "answers": ["12"], "support_ids": ["d1", "d2"], "actions": [{"search": "Atlas service plugin"}, {"search": "Beacon runtime"}, {"answer": "12"}]}

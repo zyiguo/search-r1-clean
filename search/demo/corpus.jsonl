@@ -1,0 +1,6 @@
+{"id": "d1", "contents": "Fictional Atlas service uses the Beacon plugin."}
+{"id": "d2", "contents": "Fictional Beacon plugin needs runtime version 12."}
+{"id": "d3", "contents": "Fictional Delta service uses the Cedar plugin."}
+{"id": "d4", "contents": "Fictional Cedar plugin needs runtime version 15."}
+{"id": "d5", "contents": "Fictional Echo service uses the Flint plugin."}
+{"id": "d6", "contents": "Fictional Flint plugin needs runtime version 18."}

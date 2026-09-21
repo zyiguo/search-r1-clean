@@ -1,0 +1,7 @@
+# Preserve code bytes used in checkpoint identity hashes.
+*.py -text
+*.json -text
+*.jsonl -text
+*.sh text eol=lf
+*.md text eol=lf
+*.txt text eol=lf

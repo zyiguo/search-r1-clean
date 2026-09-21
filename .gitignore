@@ -1,0 +1,41 @@
+# Local runtimes, caches and indexes
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.codegraph/
+.codex/
+.agents/
+.verification/
+.cache/
+.pytest_cache/
+# Private configuration and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+# Generated datasets, model weights and experiment artifacts
+/models/
+/outputs/
+/reports/
+/dist/
+/data/
+*.safetensors
+*.pt
+*.pth
+*.bin
+*.parquet
+*.zip
+*.gz
+*.log
+events.out.tfevents.*
+# Only checked-in example configs and fictional fixtures belong in search/
+/search/*
+!/search/config.json
+!/search/pilot.json
+!/search/pilot-sft-strong.json
+!/search/pilot-sft-metrics.json
+!/search/pilot-sft-400.json
+!/search/pilot-sft-400-b16.json
+!/search/demo/

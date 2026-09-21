@@ -1,0 +1,40 @@
+{
+  "model_id": "Qwen/Qwen3-4B-Instruct-2507",
+  "model_revision": "cdbee75f17c01a7cc42f958dc650907174af0554",
+  "model_path": "models/Qwen3-4B-Instruct-2507",
+  "dtype": "auto",
+  "seed": 42,
+  "lora": {
+    "r": 16,
+    "lora_alpha": 32,
+    "lora_dropout": 0.0,
+    "target_modules": [
+      "q_proj",
+      "k_proj",
+      "v_proj",
+      "o_proj",
+      "gate_proj",
+      "up_proj",
+      "down_proj"
+    ]
+  },
+  "merged_model_path": "models/Qwen3-4B-search-B1-merged",
+  "sft_output": "outputs/search-sft-smoke",
+  "grpo_output": "outputs/search-grpo-smoke",
+  "data_dir": "search/demo",
+  "max_searches": 2,
+  "top_k": 2,
+  "document_chars": 800,
+  "max_context": 2048,
+  "max_action_tokens": 192,
+  "group_size": 2,
+  "sft_accumulation": 2,
+  "sft_steps": 1,
+  "sft_lr": 0.0001,
+  "grpo_steps": 1,
+  "grpo_lr": 5e-06,
+  "beta": 0.04,
+  "clip": 0.2,
+  "minimum_signal_updates": 1,
+  "smoke": true
+}

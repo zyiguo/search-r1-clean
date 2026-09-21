@@ -1,0 +1,11 @@
+{
+  "demo": true,
+  "source": "Project-authored fictional fixture; not real product documentation",
+  "license": "CC0-1.0",
+  "sha256": {
+    "corpus": "e4f879ffd28db71120d226464221c351adf88e7084da7520273b37909af88f64",
+    "train": "bfa90856d9861019e66c95657b1401168ae508e69498c34cdbfc3aa59abfa997",
+    "val": "1fec6e0f453fde6da11e96b2e9c4b3b4b2b5990a511f1d8d96776ff64d81669f",
+    "test": "faad6cd5a92c586ba7600de2df9408ef542539fbc9ecd1d6d8bd3c9c6a353c7a"
+  }
+}

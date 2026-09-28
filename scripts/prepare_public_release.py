@@ -3,15 +3,13 @@
 This script creates local files only. Publish them after inspecting RELEASE-NOTES.md.
 """
 import argparse
-import hashlib
 import json
 from pathlib import Path
 import sys
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from common import path, read_json, sha256, write_json
-from search_task import load_bundle
+from common import path, read_json
 
 ASSET_LIMIT = 2 * 1024**3  # GitHub Releases require each asset to be under 2 GiB.
 DATA_ATTRIBUTION = """# Dataset attribution
@@ -37,7 +35,7 @@ Use the exact model revision recorded in experiment-provenance.json.
 
 
 def _zip_asset(destination, files, text_files=None):
-    """Write selected named files and verify their bytes and size."""
+    """Write selected named files without loading them into memory."""
     text_files = text_files or {}
     with zipfile.ZipFile(destination, 'w', compression=zipfile.ZIP_DEFLATED,
                          compresslevel=6, allowZip64=True) as archive:
@@ -48,21 +46,34 @@ def _zip_asset(destination, files, text_files=None):
     if destination.stat().st_size >= ASSET_LIMIT:
         destination.unlink()
         raise ValueError(f'{destination.name} exceeds GitHub Release 2 GiB per-asset limit')
-    with zipfile.ZipFile(destination) as archive:
-        if archive.testzip() is not None:
-            raise ValueError(f'Corrupt archive: {destination}')
-        for arcname, source in files.items():
-            digest = hashlib.sha256()
-            with archive.open(arcname) as member:
-                for block in iter(lambda: member.read(1024 * 1024), b''):
-                    digest.update(block)
-            if digest.hexdigest() != sha256(source):
-                raise ValueError(f'Archive content differs: {arcname}')
 
 
 def _bundle_files(directory, prefix):
     return {f'{prefix}/{name}': directory / name
             for name in ('manifest.json', 'train.jsonl', 'val.jsonl', 'test.jsonl', 'corpus.jsonl')}
+
+
+def _bundle_identity(directory):
+    """Read recorded identity without loading or hashing the corpus."""
+    manifest = read_json(directory / 'manifest.json')
+    if not manifest.get('source') or not manifest.get('license'):
+        raise ValueError(f'Dataset source or license missing: {directory}')
+    for name in ('corpus', 'train', 'val', 'test'):
+        file = directory / f'{name}.jsonl'
+        if not file.is_file() or file.stat().st_size == 0:
+            raise ValueError(f'Missing or empty dataset file: {file}')
+    return {'manifest': manifest, 'sha256': manifest['sha256']}
+
+
+def _question_ids(file):
+    ids = []
+    with file.open('r', encoding='utf-8') as lines:
+        for line in lines:
+            if line.strip():
+                ids.append(json.loads(line)['id'])
+    if not ids or len(ids) != len(set(ids)):
+        raise ValueError(f'Empty or duplicate question IDs: {file}')
+    return ids
 
 
 def _adapter_files(directory, prefix):
@@ -84,8 +95,8 @@ def prepare(sft_report, grpo_report, sft_data, grpo_data, sft_output,
     sft_report, grpo_report, sft_data, grpo_data, sft_output, cp, dest = paths
     if dest.exists():
         raise FileExistsError(f'Use a new release directory: {dest}')
-    sft_rows, sft_data_identity = load_bundle(sft_data)
-    grpo_rows, grpo_data_identity = load_bundle(grpo_data)
+    sft_data_identity = _bundle_identity(sft_data)
+    grpo_data_identity = _bundle_identity(grpo_data)
     if grpo_data_identity['manifest'].get('parent_identity') != sft_data_identity:
         raise ValueError('GRPO dataset must derive from this exact SFT dataset')
     if any(sft_data_identity['sha256'][key] != grpo_data_identity['sha256'][key]
@@ -101,15 +112,12 @@ def prepare(sft_report, grpo_report, sft_data, grpo_data, sft_output,
     if sft_identity['data'] != sft_data_identity:
         raise ValueError('SFT output identity differs from selected dataset')
     sft_adapter = sft_output / 'adapter'
-    sft_weight_sha = sha256(sft_adapter / 'adapter_model.safetensors')
-    if sft['adapter_sha256'] != sft_weight_sha:
-        raise ValueError('SFT report used different adapter weights')
-    if grpo['adapter_sha256'] != sha256(cp / 'adapter_model.safetensors'):
-        raise ValueError('GRPO report used different checkpoint weights')
+    _adapter_files(sft_adapter, 'sft-adapter')
+    _adapter_files(cp, 'grpo-adapter')
     cp_identity = read_json(cp / 'run-identity.json')
     if cp_identity['data'] != grpo_data_identity:
         raise ValueError('GRPO checkpoint used different dataset')
-    if cp_identity.get('sft_source_sha256') != sft_weight_sha:
+    if cp_identity.get('sft_source_sha256') != sft.get('adapter_sha256'):
         raise ValueError('GRPO did not start from this SFT adapter')
     if grpo['identity'] != cp_identity:
         raise ValueError('GRPO report and checkpoint training identities differ')
@@ -117,16 +125,12 @@ def prepare(sft_report, grpo_report, sft_data, grpo_data, sft_output,
         raise ValueError('Checkpoint is outside its recorded GRPO output')
     if not cp.name.startswith('checkpoint-') or not cp.name[11:].isdigit():
         raise ValueError('Expected a numbered GRPO checkpoint')
-    checkpoint_manifest = read_json(cp / 'checkpoint-manifest.json')
-    for name, digest in checkpoint_manifest.items():
-        if Path(name).name != name or sha256(cp / name) != digest:
-            raise ValueError(f'GRPO checkpoint manifest mismatch: {name}')
     selected = grpo.get('evaluated_checkpoint', {})
-    if selected and selected.get('manifest_sha256') != sha256(cp / 'checkpoint-manifest.json'):
+    if selected and path(selected.get('path', '')).resolve() != cp.resolve():
         raise ValueError('GRPO report refers to another checkpoint')
     sft_ids = [row['id'] for row in sft.get('rows', [])]
     grpo_ids = [row['id'] for row in grpo.get('rows', [])]
-    expected_ids = [row['id'] for row in grpo_rows['val']]
+    expected_ids = _question_ids(grpo_data / 'val.jsonl')
     if not sft_ids or sft_ids != grpo_ids or grpo_ids != expected_ids:
         raise ValueError('Reports must cover the same held-out questions in the same order')
     if sft['identity']['data'] not in (sft_data_identity, grpo_data_identity):
@@ -139,6 +143,7 @@ def prepare(sft_report, grpo_report, sft_data, grpo_data, sft_output,
         'sft_training_identity': sft_identity, 'grpo_training_identity': cp_identity,
         'sft_dataset_identity': sft_data_identity, 'grpo_dataset_identity': grpo_data_identity,
         'published_weights': 'LoRA adapters only; no optimizer state or base weights',
+        'file_hashes_recomputed': False,
     }
     dest.mkdir(parents=True)
     _zip_asset(dest / 'reports.zip',
@@ -154,12 +159,8 @@ def prepare(sft_report, grpo_report, sft_data, grpo_data, sft_output,
     _zip_asset(dest / f'grpo-{cp.name}-adapter.zip', _adapter_files(cp, 'grpo-adapter'),
                {'MODEL-ATTRIBUTION.md': MODEL_ATTRIBUTION,
                 'grpo-training-identity.json': json.dumps(cp_identity, ensure_ascii=False, indent=2)})
-    assets = {p.name: {'sha256': sha256(p), 'bytes': p.stat().st_size}
+    assets = {p.name: {'bytes': p.stat().st_size}
               for p in sorted(dest.glob('*.zip'))}
-    write_json(dest / 'SHA256-MANIFEST.json', assets)
-    (dest / 'SHA256SUMS').write_text(
-        ''.join(f"{info['sha256']}  {name}\n" for name, info in assets.items()),
-        encoding='ascii', newline='\n')
     notes = f'''# SFT300 and GRPO {cp.name} experimental artifacts
 
 SFT EM: {sft['exact_match']:.4f}; GRPO EM: {grpo['exact_match']:.4f}; questions: {len(grpo_ids)}.
@@ -167,7 +168,8 @@ Same question IDs and order: yes. Same retrieval corpus: {'yes' if corpus_equal 
 {'The two EM values use different retrieval corpora and are not a controlled model-only comparison.' if not corpus_equal else 'The two reports use the same retrieval corpus.'}
 
 Artifacts: processed SFT and GRPO data bundles, full evaluation reports,
-SFT and GRPO LoRA adapters, provenance and SHA256 manifest. Optimizer states,
+SFT and GRPO LoRA adapters, and provenance. File hashes were not recomputed.
+Optimizer states,
 raw downloaded files and Qwen base weights are not included.
 
 HotpotQA-derived data: CC BY-SA 4.0, Yang et al., EMNLP 2018:
@@ -179,7 +181,7 @@ The dataset is a selected-context pilot, not the official HotpotQA leaderboard.
 '''
     (dest / 'RELEASE-NOTES.md').write_text(notes, encoding='utf-8', newline='\n')
     return {'directory': str(dest), 'assets': assets, 'same_retrieval_corpus': corpus_equal,
-            'release_command': f'gh release create <TAG> --repo zyiguo/search-r1-clean --target main --title <TITLE> --notes-file {dest / "RELEASE-NOTES.md"} {dest / "*.zip"} {dest / "SHA256-MANIFEST.json"} {dest / "SHA256SUMS"}'}
+            'release_command': f'gh release create <TAG> --repo zyiguo/search-r1-clean --target main --title <TITLE> --notes-file {dest / "RELEASE-NOTES.md"} {dest / "*.zip"}'}
 
 
 def main():

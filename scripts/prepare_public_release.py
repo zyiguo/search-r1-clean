@@ -88,11 +88,11 @@ def _adapter_files(directory, prefix):
     return result
 
 
-def prepare(sft_report, grpo_report, sft_data, grpo_data, sft_output,
+def prepare(grpo_report, sft_data, grpo_data, sft_output,
             grpo_checkpoint, output_dir):
-    paths = list(map(path, (sft_report, grpo_report, sft_data, grpo_data,
+    paths = list(map(path, (grpo_report, sft_data, grpo_data,
                             sft_output, grpo_checkpoint, output_dir)))
-    sft_report, grpo_report, sft_data, grpo_data, sft_output, cp, dest = paths
+    grpo_report, sft_data, grpo_data, sft_output, cp, dest = paths
     if dest.exists():
         raise FileExistsError(f'Use a new release directory: {dest}')
     sft_data_identity = _bundle_identity(sft_data)
@@ -102,12 +102,9 @@ def prepare(sft_report, grpo_report, sft_data, grpo_data, sft_output,
     if any(sft_data_identity['sha256'][key] != grpo_data_identity['sha256'][key]
            for key in ('val', 'test')):
         raise ValueError('SFT and GRPO data changed held-out questions')
-    sft = read_json(sft_report)
     grpo = read_json(grpo_report)
-    if sft.get('variant_base') != 'B1' or grpo.get('variant_base') != 'B3':
-        raise ValueError('Expected a B1 SFT report and B3 GRPO report')
-    if sft.get('split') != 'val' or grpo.get('split') != 'val':
-        raise ValueError('Publish validated val reports before final test results')
+    if grpo.get('variant_base') != 'B3' or grpo.get('split') != 'val':
+        raise ValueError('Expected a B3 GRPO validation report')
     sft_identity = read_json(sft_output / 'identity.json')
     if sft_identity['data'] != sft_data_identity:
         raise ValueError('SFT output identity differs from selected dataset')
@@ -117,8 +114,8 @@ def prepare(sft_report, grpo_report, sft_data, grpo_data, sft_output,
     cp_identity = read_json(cp / 'run-identity.json')
     if cp_identity['data'] != grpo_data_identity:
         raise ValueError('GRPO checkpoint used different dataset')
-    if cp_identity.get('sft_source_sha256') != sft.get('adapter_sha256'):
-        raise ValueError('GRPO did not start from this SFT adapter')
+    if not cp_identity.get('sft_source_sha256'):
+        raise ValueError('GRPO checkpoint does not record an SFT source')
     if grpo['identity'] != cp_identity:
         raise ValueError('GRPO report and checkpoint training identities differ')
     if cp.parent.resolve() != path(cp_identity['config']['grpo_output']).resolve():
@@ -128,18 +125,13 @@ def prepare(sft_report, grpo_report, sft_data, grpo_data, sft_output,
     selected = grpo.get('evaluated_checkpoint', {})
     if selected and path(selected.get('path', '')).resolve() != cp.resolve():
         raise ValueError('GRPO report refers to another checkpoint')
-    sft_ids = [row['id'] for row in sft.get('rows', [])]
     grpo_ids = [row['id'] for row in grpo.get('rows', [])]
     expected_ids = _question_ids(grpo_data / 'val.jsonl')
-    if not sft_ids or sft_ids != grpo_ids or grpo_ids != expected_ids:
-        raise ValueError('Reports must cover the same held-out questions in the same order')
-    if sft['identity']['data'] not in (sft_data_identity, grpo_data_identity):
-        raise ValueError('SFT report used an unrelated evaluation dataset')
-    corpus_equal = sft['identity']['data']['sha256']['corpus'] == grpo_data_identity['sha256']['corpus']
+    if not grpo_ids or grpo_ids != expected_ids:
+        raise ValueError('GRPO report must cover the held-out questions in order')
     provenance = {
-        'sft_report_em': sft['exact_match'], 'grpo_report_em': grpo['exact_match'],
+        'grpo_report_em': grpo['exact_match'],
         'questions': len(grpo_ids), 'checkpoint_step': int(cp.name[11:]),
-        'same_questions': True, 'same_retrieval_corpus': corpus_equal,
         'sft_training_identity': sft_identity, 'grpo_training_identity': cp_identity,
         'sft_dataset_identity': sft_data_identity, 'grpo_dataset_identity': grpo_data_identity,
         'published_weights': 'LoRA adapters only; no optimizer state or base weights',
@@ -147,7 +139,7 @@ def prepare(sft_report, grpo_report, sft_data, grpo_data, sft_output,
     }
     dest.mkdir(parents=True)
     _zip_asset(dest / 'reports.zip',
-               {'reports/sft.json': sft_report, 'reports/grpo.json': grpo_report},
+               {'reports/grpo.json': grpo_report},
                {'experiment-provenance.json': json.dumps(provenance, ensure_ascii=False, indent=2)})
     _zip_asset(dest / 'sft-dataset.zip', _bundle_files(sft_data, 'sft-dataset'),
                {'DATASET-ATTRIBUTION.md': DATA_ATTRIBUTION})
@@ -163,9 +155,9 @@ def prepare(sft_report, grpo_report, sft_data, grpo_data, sft_output,
               for p in sorted(dest.glob('*.zip'))}
     notes = f'''# SFT300 and GRPO {cp.name} experimental artifacts
 
-SFT EM: {sft['exact_match']:.4f}; GRPO EM: {grpo['exact_match']:.4f}; questions: {len(grpo_ids)}.
-Same question IDs and order: yes. Same retrieval corpus: {'yes' if corpus_equal else 'no'}.
-{'The two EM values use different retrieval corpora and are not a controlled model-only comparison.' if not corpus_equal else 'The two reports use the same retrieval corpus.'}
+GRPO EM: {grpo['exact_match']:.4f}; questions: {len(grpo_ids)}.
+The SFT evaluation report is intentionally excluded. This release does not claim
+an SFT-versus-GRPO improvement.
 
 Artifacts: processed SFT and GRPO data bundles, full evaluation reports,
 SFT and GRPO LoRA adapters, and provenance. File hashes were not recomputed.
@@ -180,28 +172,26 @@ https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507
 The dataset is a selected-context pilot, not the official HotpotQA leaderboard.
 '''
     (dest / 'RELEASE-NOTES.md').write_text(notes, encoding='utf-8', newline='\n')
-    return {'directory': str(dest), 'assets': assets, 'same_retrieval_corpus': corpus_equal,
+    return {'directory': str(dest), 'assets': assets,
             'release_command': f'gh release create <TAG> --repo zyiguo/search-r1-clean --target main --title <TITLE> --notes-file {dest / "RELEASE-NOTES.md"} {dest / "*.zip"}'}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for key in ('sft-report', 'grpo-report', 'output-dir'):
+    for key in ('grpo-report', 'output-dir'):
         parser.add_argument('--' + key, required=True)
     for key in ('sft-data', 'grpo-data', 'sft-output', 'grpo-checkpoint'):
         parser.add_argument('--' + key)
     args = parser.parse_args()
-    sft = read_json(args.sft_report)
     grpo = read_json(args.grpo_report)
-    sft_config = sft['identity']['config']
     grpo_config = grpo['identity']['config']
     checkpoint = args.grpo_checkpoint or grpo.get('evaluated_checkpoint', {}).get('path')
     if not checkpoint:
         parser.error('GRPO report has no checkpoint path; supply --grpo-checkpoint')
-    result = prepare(args.sft_report, args.grpo_report,
-                     args.sft_data or sft_config['data_dir'],
+    result = prepare(args.grpo_report,
+                     args.sft_data or grpo_config['data_dir'],
                      args.grpo_data or grpo_config.get('grpo_data_dir', grpo_config['data_dir']),
-                     args.sft_output or sft_config['sft_output'],
+                     args.sft_output or grpo_config['sft_output'],
                      checkpoint, args.output_dir)
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
